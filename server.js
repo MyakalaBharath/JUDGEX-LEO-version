@@ -125,4 +125,8 @@ app.post("/api/transcript-analyze", async (req, res) => {
 
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "index.html")));
 
-app.listen(PORT, () => console.log(`JUDGEX V2 running at http://localhost:${PORT}`));
+const PORT = process.env.PORT || 10000;
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`JUDGEX backend running on port ${PORT}`);
+});
