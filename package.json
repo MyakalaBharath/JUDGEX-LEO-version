@@ -1,0 +1,10 @@
+{
+  "name":"judgex-v2",
+  "version":"3.0.0",
+  "private":true,
+  "description":"JUDGEX V2 real-time multimodal agentic AI judging platform",
+  "main":"server.js",
+  "scripts":{"start":"node server.js","dev":"node server.js"},
+  "engines":{"node":">=20"},
+  "dependencies":{"cors":"^2.8.5","dotenv":"^16.6.1","express":"^5.1.0","openai":"^5.20.0"}
+}
