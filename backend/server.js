@@ -1,87 +1,65 @@
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
-require("dotenv").config();
+const OpenAI = require("openai");
 
 const app = express();
 
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
+const PORT = process.env.PORT || 10000;
+const MODEL = process.env.OPENAI_MODEL || "gpt-5";
+const VISION_MODEL = process.env.OPENAI_VISION_MODEL || MODEL;
 
+app.use(cors());
 app.use(express.json({ limit: "12mb" }));
 
-const PORT = process.env.PORT || 10000;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
+const client = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
 
-// ---------- OpenAI helper ----------
-
-async function askAI(instructions, input, imageData = null) {
-  if (!OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not configured in Render.");
-  }
-
-  const content = [
-    {
-      type: "input_text",
-      text: input
-    }
-  ];
-
-  if (imageData) {
-    content.push({
-      type: "input_image",
-      image_url: imageData
+function requireAI(res) {
+  if (!client) {
+    res.status(503).json({
+      error: "AI backend is not configured."
     });
+    return false;
   }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${OPENAI_API_KEY}`
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      instructions,
-      input: [
-        {
-          role: "user",
-          content
-        }
-      ]
-    })
+  return true;
+}
+
+async function ai(input, model = MODEL) {
+  const response = await client.responses.create({
+    model,
+    input
   });
 
-  const data = await response.json();
-
-  if (!response.ok) {
-    console.error("OpenAI error:", data);
-    throw new Error(
-      data?.error?.message || `OpenAI request failed (${response.status})`
-    );
-  }
-
-  return data.output_text || "";
+  return response.output_text || "";
 }
 
-function parseJSON(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (match) {
-      try {
-        return JSON.parse(match[0]);
-      } catch {}
-    }
-    return {};
-  }
+function cleanJson(text) {
+  const cleaned = String(text || "")
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+
+  return JSON.parse(cleaned);
 }
 
-// ---------- Basic health ----------
+function projectContext(p = {}) {
+  return `
+PROJECT NAME: ${p.projectName || "Not provided"}
+PROBLEM: ${p.problem || "Not provided"}
+SOLUTION: ${p.solution || "Not provided"}
+TECHNOLOGY: ${p.technology || "Not provided"}
+IMPACT: ${p.impact || "Not provided"}
+`;
+}
+
+/* =========================
+   HEALTH
+========================= */
 
 app.get("/", (req, res) => {
   res.json({
@@ -92,69 +70,414 @@ app.get("/", (req, res) => {
 
 app.get("/api/health", (req, res) => {
   res.json({
+    ok: true,
     online: true,
-    aiConfigured: Boolean(OPENAI_API_KEY),
-    model: MODEL
+    aiConfigured: !!client,
+    model: MODEL,
+    features: {
+      chatbot: true,
+      agents: true,
+      vision: true,
+      camera: true,
+      microphone: true,
+      screenShare: true,
+      transcript: true
+    }
   });
 });
 
-// ---------- AI Chatbot ----------
+/* =========================
+   AI CHATBOT
+========================= */
 
 app.post("/api/chat", async (req, res) => {
-  try {
-    const { message, project, history = [], liveState = {} } = req.body;
+  if (!requireAI(res)) return;
 
-    if (!message) {
-      return res.status(400).json({ error: "Message is required." });
+  try {
+    const {
+      message,
+      project = {},
+      history = [],
+      liveState = {}
+    } = req.body || {};
+
+    if (!message?.trim()) {
+      return res.status(400).json({
+        error: "Message is required."
+      });
     }
 
     const prompt = `
-You are JUDGEX AI, an intelligent hackathon presentation coach and judge.
+You are JUDGEX AI.
 
-Help the presenter improve their project and presentation.
+You are an intelligent hackathon assistant, presentation coach,
+technical mentor and judge.
+
+Help the presenter with:
+- project explanations
+- technical questions
+- judge questions
+- presentation improvement
+- architecture
+- innovation
+- feasibility
+- impact
+- demo preparation
+- live presentation coaching
 
 PROJECT:
-${JSON.stringify(project || {}, null, 2)}
+${projectContext(project)}
 
-RECENT PRESENTATION STATE:
-${JSON.stringify(liveState || {}, null, 2)}
+LIVE PRESENTATION STATE:
+${JSON.stringify(liveState, null, 2)}
 
-CHAT HISTORY:
+RECENT CHAT:
 ${JSON.stringify(history.slice(-10), null, 2)}
 
-USER MESSAGE:
+USER:
 ${message}
 
-Give a useful, concise answer. Do not invent project facts.
+Rules:
+1. Do not invent facts.
+2. If information is missing, say so.
+3. Give practical answers.
+4. Keep responses reasonably concise.
+5. When useful, give numbered steps.
 `;
 
-    const reply = await askAI(
-      "You are JUDGEX AI, a professional and supportive AI presentation coach.",
-      prompt
-    );
+    const reply = await ai(prompt);
 
-    res.json({ reply });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
+    res.json({
+      reply
+    });
+
+  } catch (e) {
+    console.error("CHAT ERROR:", e);
+
+    res.status(500).json({
+      error: e.message || "Chat failed"
+    });
   }
 });
 
-// ---------- Transcript Analysis ----------
+/* =========================
+   NORMAL AI EVALUATION
+========================= */
+
+app.post("/api/evaluate", async (req, res) => {
+  if (!requireAI(res)) return;
+
+  try {
+    const project = req.body || {};
+
+    if (
+      !project.projectName ||
+      !project.problem ||
+      !project.solution
+    ) {
+      return res.status(400).json({
+        error: "projectName, problem and solution are required."
+      });
+    }
+
+    const prompt = `
+You are the lead JUDGEX hackathon evaluator.
+
+Evaluate the project fairly using ONLY the supplied information.
+
+${projectContext(project)}
+
+Return ONLY valid JSON:
+
+{
+  "overallScore": 0,
+  "verdict": "Strong",
+  "scores": {
+    "problem": 0,
+    "innovation": 0,
+    "technical": 0,
+    "impact": 0,
+    "feasibility": 0
+  },
+  "summary": "",
+  "strengths": [],
+  "improvements": [],
+  "judgeQuestions": [],
+  "risks": [],
+  "nextActions": []
+}
+
+All scores must be 0-100.
+`;
+
+    const result = cleanJson(await ai(prompt));
+
+    res.json({
+      result
+    });
+
+  } catch (e) {
+    console.error("EVALUATION ERROR:", e);
+
+    res.status(500).json({
+      error: e.message || "Evaluation failed"
+    });
+  }
+});
+
+/* =========================
+   TRUE MULTI-AGENT JUDGE
+========================= */
+
+app.post("/api/agentic-evaluate", async (req, res) => {
+  if (!requireAI(res)) return;
+
+  try {
+    const project = req.body || {};
+
+    if (
+      !project.projectName ||
+      !project.problem ||
+      !project.solution
+    ) {
+      return res.status(400).json({
+        error: "Project name, problem and solution are required."
+      });
+    }
+
+    const context = projectContext(project);
+
+    const agents = [
+      [
+        "Problem & Impact Agent",
+        "Judge problem clarity, users, urgency and measurable impact."
+      ],
+      [
+        "Innovation Agent",
+        "Judge originality, differentiation and innovation."
+      ],
+      [
+        "Technical Agent",
+        "Judge architecture, technology, security, reliability and scalability."
+      ],
+      [
+        "Pitch Agent",
+        "Judge storytelling, clarity, evidence and demo readiness."
+      ],
+      [
+        "Feasibility Agent",
+        "Judge implementation feasibility, cost, deployment and adoption."
+      ]
+    ];
+
+    const results = await Promise.all(
+      agents.map(async ([name, role]) => {
+
+        const prompt = `
+You are the ${name}.
+
+ROLE:
+${role}
+
+PROJECT:
+${context}
+
+Return ONLY valid JSON:
+
+{
+  "agent": "${name}",
+  "score": 0,
+  "confidence": 0,
+  "findings": [],
+  "risks": [],
+  "questions": [],
+  "recommendations": []
+}
+
+Scores must be 0-100.
+`;
+
+        return cleanJson(await ai(prompt));
+      })
+    );
+
+    const synthesisPrompt = `
+You are the JUDGEX Lead Judge.
+
+Synthesize these independent judging agents.
+
+PROJECT:
+${context}
+
+AGENT REPORTS:
+${JSON.stringify(results, null, 2)}
+
+Return ONLY valid JSON:
+
+{
+  "overallScore": 0,
+  "verdict": "Strong",
+  "scores": {
+    "problem": 0,
+    "innovation": 0,
+    "technical": 0,
+    "impact": 0,
+    "feasibility": 0
+  },
+  "confidence": 0,
+  "summary": "",
+  "topStrengths": [],
+  "criticalGaps": [],
+  "judgeQuestions": [],
+  "actionPlan": [],
+  "agentConsensus": ""
+}
+
+Do not invent evidence.
+`;
+
+    const finalResult = cleanJson(
+      await ai(synthesisPrompt)
+    );
+
+    res.json({
+      result: finalResult,
+      agents: results
+    });
+
+  } catch (e) {
+    console.error("AGENT ERROR:", e);
+
+    res.status(500).json({
+      error: e.message || "Agentic evaluation failed"
+    });
+  }
+});
+
+/* =========================
+   LIVE CAMERA + SCREEN AI
+========================= */
+
+app.post("/api/live-analyze", async (req, res) => {
+  if (!requireAI(res)) return;
+
+  try {
+    const {
+      project = {},
+      transcript = "",
+      frame = null,
+      screenFrame = null
+    } = req.body || {};
+
+    if (!project.projectName) {
+      return res.status(400).json({
+        error: "Project context is required."
+      });
+    }
+
+    const content = [
+      {
+        type: "input_text",
+        text: `
+You are JUDGEX real-time presentation AI.
+
+PROJECT:
+${projectContext(project)}
+
+LIVE TRANSCRIPT:
+${transcript || "No transcript available."}
+
+Analyze only information actually available.
+
+Return ONLY valid JSON:
+
+{
+  "observation": "",
+  "strengths": [],
+  "alerts": [],
+  "coaching": "",
+  "scoreDelta": 0
+}
+`
+      }
+    ];
+
+    if (frame) {
+      content.push({
+        type: "input_image",
+        image_url: frame
+      });
+    }
+
+    if (screenFrame) {
+      content.push({
+        type: "input_image",
+        image_url: screenFrame
+      });
+    }
+
+    const text = await ai(
+      [
+        {
+          role: "user",
+          content
+        }
+      ],
+      VISION_MODEL
+    );
+
+    let result;
+
+    try {
+      result = cleanJson(text);
+    } catch {
+      result = {
+        observation: text,
+        strengths: [],
+        alerts: [],
+        coaching: "",
+        scoreDelta: 0
+      };
+    }
+
+    res.json({
+      result,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (e) {
+    console.error("LIVE ANALYSIS ERROR:", e);
+
+    res.status(500).json({
+      error: e.message || "Live analysis failed"
+    });
+  }
+});
+
+/* =========================
+   TRANSCRIPT AI
+========================= */
 
 app.post("/api/transcript-analyze", async (req, res) => {
+  if (!requireAI(res)) return;
+
   try {
-    const { project, transcript } = req.body;
+    const {
+      project = {},
+      transcript = ""
+    } = req.body || {};
 
     if (!transcript) {
-      return res.status(400).json({ error: "Transcript is required." });
+      return res.status(400).json({
+        error: "Transcript is required."
+      });
     }
 
     const prompt = `
 Analyze this hackathon presentation transcript.
 
 PROJECT:
-${JSON.stringify(project || {}, null, 2)}
+${projectContext(project)}
 
 TRANSCRIPT:
 ${transcript}
@@ -164,234 +487,32 @@ Return ONLY valid JSON:
 {
   "clarity": 0,
   "confidence": 0,
+  "technicalDepth": 0,
   "evidence": 0,
-  "technicalDepth": 0
+  "fillerRisk": 0,
+  "strengths": [],
+  "issues": [],
+  "nextPrompt": ""
 }
 
-All scores must be integers from 0 to 100.
+Scores must be 0-100.
+Do not infer private traits.
 `;
 
-    const text = await askAI(
-      "You evaluate presentation communication objectively. Return valid JSON only.",
-      prompt
+    const result = cleanJson(
+      await ai(prompt)
     );
 
-    const result = parseJSON(text);
-
     res.json({
-      result: {
-        clarity: result.clarity ?? 0,
-        confidence: result.confidence ?? 0,
-        evidence: result.evidence ?? 0,
-        technicalDepth: result.technicalDepth ?? 0
-      }
+      result
     });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
-  }
-});
 
-// ---------- Live Presentation Analysis ----------
+  } catch (e) {
+    console.error("TRANSCRIPT ERROR:", e);
 
-app.post("/api/live-analyze", async (req, res) => {
-  try {
-    const {
-      project,
-      transcript = "",
-      frame = null,
-      screenFrame = null
-    } = req.body;
+    res.status(500).json({
+      error: e.message || "Transcript analysis
+  
+  
+    
 
-    if (!project?.projectName) {
-      return res.status(400).json({
-        error: "Project name is required."
-      });
-    }
-
-    const image = frame || screenFrame;
-
-    const prompt = `
-Analyze the current moment of a hackathon presentation.
-
-PROJECT:
-${JSON.stringify(project, null, 2)}
-
-CURRENT TRANSCRIPT:
-${transcript}
-
-Return ONLY valid JSON:
-
-{
-  "observation": "short observation",
-  "strengths": ["strength 1", "strength 2"],
-  "alerts": ["issue 1"],
-  "coaching": "one practical coaching suggestion"
-}
-
-Be constructive. Do not claim to detect emotions or personal characteristics from appearance.
-`;
-
-    const text = await askAI(
-      "You are a real-time presentation coach. Analyze only information actually available.",
-      prompt,
-      image
-    );
-
-    const result = parseJSON(text);
-
-    res.json({
-      result: {
-        observation: result.observation || "Live moment analyzed.",
-        strengths: Array.isArray(result.strengths) ? result.strengths : [],
-        alerts: Array.isArray(result.alerts) ? result.alerts : [],
-        coaching: result.coaching || "Keep presenting clearly."
-      }
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ---------- Agentic AI Judge ----------
-
-app.post("/api/agentic-evaluate", async (req, res) => {
-  try {
-    const { project } = req.body;
-
-    if (!project?.projectName || !project?.problem || !project?.solution) {
-      return res.status(400).json({
-        error: "Project name, problem and solution are required."
-      });
-    }
-
-    const prompt = `
-You are the main evaluator for JUDGEX.
-
-Evaluate this hackathon project:
-
-${JSON.stringify(project, null, 2)}
-
-Act as five independent judging perspectives:
-
-1. Problem Judge
-2. Innovation Judge
-3. Technical Judge
-4. Impact Judge
-5. Feasibility Judge
-
-Then create a consensus evaluation.
-
-Return ONLY valid JSON in exactly this structure:
-
-{
-  "overallScore": 0,
-  "verdict": "Strong / Needs Improvement / Weak",
-  "scores": {
-    "problem": 0,
-    "innovation": 0,
-    "technical": 0,
-    "impact": 0,
-    "feasibility": 0
-  },
-  "confidence": 0,
-  "summary": "short summary",
-  "criticalGaps": [],
-  "judgeQuestions": [],
-  "actionPlan": [],
-  "agentConsensus": "short consensus",
-  "agents": [
-    {
-      "agent": "Problem Judge",
-      "score": 0,
-      "confidence": 0,
-      "findings": []
-    },
-    {
-      "agent": "Innovation Judge",
-      "score": 0,
-      "confidence": 0,
-      "findings": []
-    },
-    {
-      "agent": "Technical Judge",
-      "score": 0,
-      "confidence": 0,
-      "findings": []
-    },
-    {
-      "agent": "Impact Judge",
-      "score": 0,
-      "confidence": 0,
-      "findings": []
-    },
-    {
-      "agent": "Feasibility Judge",
-      "score": 0,
-      "confidence": 0,
-      "findings": []
-    }
-  ]
-}
-
-All scores must be integers from 0 to 100.
-Do not invent evidence that is not present in the project description.
-`;
-
-    const text = await askAI(
-      "You are an objective multi-agent hackathon judging system. Return valid JSON only.",
-      prompt
-    );
-
-    const result = parseJSON(text);
-
-    res.json({
-      result: {
-        overallScore: result.overallScore ?? 0,
-        verdict: result.verdict || "Evaluated",
-        scores: {
-          problem: result.scores?.problem ?? 0,
-          innovation: result.scores?.innovation ?? 0,
-          technical: result.scores?.technical ?? 0,
-          impact: result.scores?.impact ?? 0,
-          feasibility: result.scores?.feasibility ?? 0
-        },
-        confidence: result.confidence ?? 0,
-        summary: result.summary || "",
-        criticalGaps: Array.isArray(result.criticalGaps)
-          ? result.criticalGaps
-          : [],
-        judgeQuestions: Array.isArray(result.judgeQuestions)
-          ? result.judgeQuestions
-          : [],
-        actionPlan: Array.isArray(result.actionPlan)
-          ? result.actionPlan
-          : [],
-        agentConsensus: result.agentConsensus || "",
-        agents: Array.isArray(result.agents)
-          ? result.agents
-          : []
-      }
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ---------- Error handling ----------
-
-app.use((err, req, res, next) => {
-  console.error("Server error:", err);
-  res.status(500).json({
-    error: "Internal server error."
-  });
-});
-
-// ---------- Start ----------
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`JUDGEX backend running on port ${PORT}`);
-  console.log(`AI configured: ${Boolean(OPENAI_API_KEY)}`);
-});
