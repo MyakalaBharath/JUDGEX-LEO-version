@@ -1,4 +1,4 @@
-const API_BASE = "https://judgex-leo-version.onrender.com";
+const API_BASE= "https://judgex-leo-version.onrender.com";
 const $ = id => document.getElementById(id);
 let cameraStream=null, screenStream=null, recorder=null, recorded=[]; let timerStart=0, timerId=null, liveTimer=null;
 let recognition=null, transcript="", session=false, lastResult=null, chatHistory=[];
