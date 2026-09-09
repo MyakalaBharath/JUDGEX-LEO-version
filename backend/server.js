@@ -457,23 +457,18 @@ Return ONLY valid JSON:
 /* =========================
    TRANSCRIPT AI
 ========================= */
+ app.post("/api/transcript", async (req, res) => {
+    try {
 
-app.post("/api/transcript-analyze", async (req, res) => {
-  if (!requireAI(res)) return;
+        const { project, transcript } = req.body;
 
-  try {
-    const {
-      project = {},
-      transcript = ""
-    } = req.body || {};
+        if (!transcript) {
+            return res.status(400).json({
+                error: "Transcript is required"
+            });
+        }
 
-    if (!transcript) {
-      return res.status(400).json({
-        error: "Transcript is required."
-      });
-    }
-
-    const prompt = `
+        const prompt = `
 Analyze this hackathon presentation transcript.
 
 PROJECT:
@@ -485,34 +480,36 @@ ${transcript}
 Return ONLY valid JSON:
 
 {
-  "clarity": 0,
-  "confidence": 0,
-  "technicalDepth": 0,
-  "evidence": 0,
-  "fillerRisk": 0,
-  "strengths": [],
-  "issues": [],
-  "nextPrompt": ""
+    "clarity": 0,
+    "confidence": 0,
+    "technicalDepth": 0,
+    "evidence": 0,
+    "fillerRisk": 0,
+    "strengths": [],
+    "issues": [],
+    "nextPrompt": ""
 }
 
 Scores must be 0-100.
 Do not infer private traits.
 `;
 
-    const result = cleanJson(
-      await ai(prompt)
-    );
+        const result = cleanJson(
+            await ai(prompt)
+        );
 
-    res.json({
-      result
-    });
+        res.json({
+            result
+        });
 
-  } catch (e) {
-    console.error("TRANSCRIPT ERROR:", e);
+    } catch (e) {
+        console.error("TRANSCRIPT ERROR:", e);
 
-    res.status(500).json({
-      error: e.message || "Transcript analysis
+        res.status(500).json({
+            error: e.message || "Transcript analysis failed"
+        });
+    }
+});
   
   
     
-
