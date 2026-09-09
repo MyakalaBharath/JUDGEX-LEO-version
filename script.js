@@ -1,35 +1,1253 @@
-const API_BASE= "https://judgex-leo-version.onrender.com";
+const API_BASE = "https://judgex-leo-version.onrender.com";
+
 const $ = id => document.getElementById(id);
-let cameraStream=null, screenStream=null, recorder=null, recorded=[]; let timerStart=0, timerId=null, liveTimer=null;
-let recognition=null, transcript="", session=false, lastResult=null, chatHistory=[];
 
-async function api(path, options={}){const r=await fetch(`${API_BASE}${path}`,{headers:{"Content-Type":"application/json",...(options.headers||{})},...options});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||`Request failed (${r.status})`);return d;}
-function project(){return {projectName:$('projectName').value.trim(),problem:$('problem').value.trim(),solution:$('solution').value.trim(),technology:$('technology').value.trim(),impact:$('impact').value.trim()};}
-function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
-function list(id,items=[]){$(id).innerHTML=(items||[]).map(x=>`<li>${esc(x)}</li>`).join('');}
-async function health(){try{const d=await api('/api/health');$('statusText').textContent=d.aiConfigured?`AI Connected • ${d.model}`:'Backend online • API key missing';document.querySelector('.status').classList.toggle('online',d.aiConfigured);}catch{$('statusText').textContent='Backend offline';}}
+let cameraStream = null;
+let screenStream = null;
+let recorder = null;
+let recorded = [];
 
-async function startCamera(){try{cameraStream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:720}},audio:true});$('camera').srcObject=cameraStream;$('camera').classList.add('visible');$('mediaPlaceholder').style.display='none';startMeter(cameraStream);return true;}catch(e){addMessage('Camera/microphone permission was not granted: '+e.message,'ai');return false;}}
-async function startScreen(){try{screenStream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:true});$('screen').srcObject=screenStream;$('screen').classList.add('visible');screenStream.getVideoTracks()[0].addEventListener('ended',()=>{$('screen').classList.remove('visible');screenStream=null;});return true;}catch(e){addMessage('Screen sharing was cancelled.','ai');return false;}}
-function startMeter(stream){try{const ctx=new AudioContext(),src=ctx.createMediaStreamSource(stream),an=ctx.createAnalyser();an.fftSize=256;src.connect(an);const data=new Uint8Array(an.frequencyBinCount);(function tick(){if(!cameraStream)return;an.getByteTimeDomainData(data);let sum=0;for(const v of data){const x=(v-128)/128;sum+=x*x;}$('micLevel').style.width=Math.min(100,Math.sqrt(sum/data.length)*260)+'%';requestAnimationFrame(tick);})();}catch{}}
-function startSpeech(){const SR=window.SpeechRecognition||window.webkitSpeechRecognition;if(!SR){$('speechState').textContent='UNAVAILABLE';return;}recognition=new SR();recognition.continuous=true;recognition.interimResults=true;recognition.lang='en-IN';recognition.onstart=()=>$('speechState').textContent='LISTENING';recognition.onend=()=>{if(session)try{recognition.start()}catch{}};recognition.onerror=()=>{};recognition.onresult=e=>{let finalText='';for(let i=e.resultIndex;i<e.results.length;i++)finalText+=e.results[i][0].transcript; if(e.results[e.results.length-1].isFinal){transcript+=` ${finalText}`;$('transcriptText').textContent=transcript.trim();if(transcript.length%600<80)analyzeTranscript();}};try{recognition.start()}catch{}}
-async function analyzeTranscript(){if(!transcript)return;try{const d=await api('/api/transcript-analyze',{method:'POST',body:JSON.stringify({project:project(),transcript:transcript.slice(-5000)})});const r=d.result||{};$('clarity').textContent=r.clarity??'--';$('presentationScore').textContent=r.confidence??'--';$('evidence').textContent=r.evidence??'--';$('liveTechnical').textContent=r.technicalDepth??'--';}catch{}}
-function startClock(){timerStart=Date.now();timerId=setInterval(()=>{const s=Math.floor((Date.now()-timerStart)/1000);$('timer').textContent=`${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`},500)}
-function stopClock(){clearInterval(timerId);}
-function captureFrame(video){if(!video.videoWidth)return null;const c=document.createElement('canvas');c.width=640;c.height=Math.round(video.videoHeight/video.videoWidth*640);const x=c.getContext('2d');x.drawImage(video,0,0,c.width,c.height);return c.toDataURL('image/jpeg',.58);}
-async function liveAnalyze(){if(!session)return;const p=project();if(!p.projectName)return;const frame=captureFrame($('camera')),screen=captureFrame($('screen'));if(!frame&&!screen)return;$('analysisState').textContent='ANALYZING';try{const d=await api('/api/live-analyze',{method:'POST',body:JSON.stringify({project:p,transcript:transcript.slice(-2500),frame,screenFrame:screen})});const r=d.result||{};$('liveFeed').innerHTML=`<div><b>${esc(r.observation||'Live moment analyzed')}</b></div>${(r.strengths||[]).map(x=>`<div class="feedGood">+ ${esc(x)}</div>`).join('')}${(r.alerts||[]).map(x=>`<div class="feedAlert">! ${esc(x)}</div>`).join('')}<div class="coach">Coach: ${esc(r.coaching||'Keep presenting clearly.')}</div>`;$('analysisState').textContent='LIVE';}catch(e){$('analysisState').textContent='ERROR';}finally{if(session)liveTimer=setTimeout(liveAnalyze,8000);}}
+let timerStart = 0;
+let timerId = null;
+let liveTimer = null;
 
-$('startSession').onclick=async()=>{if(session)return;session=true;$('sessionState').textContent='LIVE';$('startSession').disabled=true;startClock();await startCamera();startSpeech();liveAnalyze();};
-$('stopSession').onclick=()=>{session=false;$('sessionState').textContent='STOPPED';$('startSession').disabled=false;stopClock();clearTimeout(liveTimer);if(recognition){try{recognition.stop()}catch{}}[cameraStream,screenStream].forEach(s=>s?.getTracks().forEach(t=>t.stop()));cameraStream=null;screenStream=null;};
-$('cameraBtn').onclick=()=>cameraStream?cameraStream.getTracks().forEach(t=>t.enabled=!t.enabled):startCamera();
-$('micBtn').onclick=()=>cameraStream&&cameraStream.getAudioTracks().forEach(t=>t.enabled=!t.enabled);
-$('screenBtn').onclick=startScreen;
-$('recordBtn').onclick=()=>{if(!cameraStream)return alert('Start the live session first.');if(!recorder){recorded=[];recorder=new MediaRecorder(cameraStream);recorder.ondataavailable=e=>e.data.size&&recorded.push(e.data);recorder.onstop=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(recorded,{type:'video/webm'}));a.download='judgex-session.webm';a.click();recorder=null;};recorder.start();$('recordBtn').textContent='Stop & Save';}else{recorder.stop();$('recordBtn').textContent='Record';}};
-$('clearTranscript').onclick=()=>{transcript='';$('transcriptText').textContent='';};
-$('agentBtn').onclick=async()=>{const p=project();if(!p.projectName||!p.problem||!p.solution)return alert('Enter project name, problem and solution first.');const b=$('agentBtn');b.disabled=true;b.textContent='Agents are judging…';try{const d=await api('/api/agentic-evaluate',{method:'POST',body:JSON.stringify(p)});lastResult=d.result;const r=d.result;$('overallScore').textContent=r.overallScore??'--';$('verdict').textContent=r.verdict||'Evaluated';$('problemScore').textContent=r.scores?.problem??'--';$('innovationScore').textContent=r.scores?.innovation??'--';$('technicalScore').textContent=r.scores?.technical??'--';$('impactScore').textContent=r.scores?.impact??'--';$('feasibilityScore').textContent=r.scores?.feasibility??'--';$('confidence').textContent=(r.confidence??'--')+'%';$('summary').textContent=r.summary||'';list('gaps',r.criticalGaps);list('questions',r.judgeQuestions);list('actionPlan',r.actionPlan);$('consensus').textContent=r.agentConsensus||'';$('agentReports').innerHTML=(d.agents||[]).map(a=>`<div class="agentRow"><b>${esc(a.agent)}</b><span>${a.score}/100 • ${a.confidence}% confidence</span><small>${esc((a.findings||[]).slice(0,2).join(' '))}</small></div>`).join('');}catch(e){alert(e.message)}finally{b.disabled=false;b.textContent='Run Agentic AI Judge';}};
-$('demoBtn').onclick=()=>{$('projectName').value='SAFEHELM';$('problem').value='Industrial workers may face hazards without early detection or real-time supervisor visibility.';$('solution').value='A smart safety helmet concept using sensors, alerts and a supervisor dashboard to improve workplace hazard awareness.';$('technology').value='ESP32, sensors, wireless connectivity, real-time dashboard and AI-assisted analysis.';$('impact').value='Faster safety alerts, better supervisor visibility, scalable worker monitoring and a path toward industrial deployment.';};
-$('sendBtn').onclick=sendChat;$('chatInput').onkeydown=e=>{if(e.key==='Enter')sendChat()};
-async function sendChat(){const text=$('chatInput').value.trim();if(!text)return;addMessage(text,'user');$('chatInput').value='';$('sendBtn').disabled=true;try{const d=await api('/api/chat',{method:'POST',body:JSON.stringify({message:text,project:project(),history:chatHistory,liveState:{transcript:transcript.slice(-1200),score:lastResult?.overallScore}})});chatHistory.push({role:'user',content:text},{role:'assistant',content:d.reply});addMessage(d.reply,'ai')}catch(e){addMessage('AI connection error: '+e.message,'ai')}finally{$('sendBtn').disabled=false;}}
-function addMessage(text,type){const d=document.createElement('div');d.className='message '+type;d.textContent=text;$('chatMessages').appendChild(d);$('chatMessages').scrollTop=$('chatMessages').scrollHeight;}
-$('exportBtn').onclick=()=>{const report={generatedAt:new Date().toISOString(),project:project(),agenticJudge:lastResult,transcript};const blob=new Blob([JSON.stringify(report,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='JUDGEX-final-report.json';a.click();};
+let recognition = null;
+let transcript = "";
+let session = false;
+let lastResult = null;
+let chatHistory = [];
+
+
+/* =========================
+   API
+========================= */
+
+async function api(path, options = {}) {
+  const r = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.headers || {})
+    },
+    ...options
+  });
+
+  const d = await r.json().catch(() => ({}));
+
+  if (!r.ok) {
+    throw new Error(
+      d.error || `Request failed (${r.status})`
+    );
+  }
+
+  return d;
+}
+
+
+/* =========================
+   PROJECT DATA
+========================= */
+
+function project() {
+  return {
+    projectName: $("projectName").value.trim(),
+    problem: $("problem").value.trim(),
+    solution: $("solution").value.trim(),
+    technology: $("technology").value.trim(),
+    impact: $("impact").value.trim()
+  };
+}
+
+
+/* =========================
+   SECURITY / HTML
+========================= */
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;"
+  }[c]));
+}
+
+
+function list(id, items = []) {
+  $(id).innerHTML = (items || [])
+    .map(x => `<li>${esc(x)}</li>`)
+    .join("");
+}
+
+
+/* =========================
+   BACKEND HEALTH
+========================= */
+
+async function health() {
+  try {
+    const d = await api("/api/health");
+
+    $("statusText").textContent = d.aiConfigured
+      ? `AI Connected • ${d.model}`
+      : "Backend online • API key missing";
+
+    const status = document.querySelector(".status");
+
+    if (status) {
+      status.classList.toggle(
+        "online",
+        d.aiConfigured
+      );
+    }
+
+  } catch (e) {
+
+    $("statusText").textContent =
+      "Backend offline";
+
+    console.error("Health error:", e);
+  }
+}
+
+
+/* =========================
+   CAMERA
+========================= */
+
+async function startCamera() {
+
+  try {
+
+    cameraStream =
+      await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: true
+      });
+
+    $("camera").srcObject = cameraStream;
+
+    $("camera").classList.add("visible");
+
+    $("mediaPlaceholder").style.display = "none";
+
+    startMeter(cameraStream);
+
+    return true;
+
+  } catch (e) {
+
+    addMessage(
+      "Camera/microphone permission was not granted: " +
+      e.message,
+      "ai"
+    );
+
+    return false;
+  }
+}
+
+
+/* =========================
+   SCREEN SHARE
+========================= */
+
+async function startScreen() {
+
+  try {
+
+    screenStream =
+      await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: true
+      });
+
+    $("screen").srcObject = screenStream;
+
+    $("screen").classList.add("visible");
+
+    screenStream
+      .getVideoTracks()[0]
+      .addEventListener("ended", () => {
+
+        $("screen").classList.remove("visible");
+
+        screenStream = null;
+      });
+
+    return true;
+
+  } catch (e) {
+
+    addMessage(
+      "Screen sharing was cancelled.",
+      "ai"
+    );
+
+    return false;
+  }
+}
+
+
+/* =========================
+   MICROPHONE METER
+========================= */
+
+function startMeter(stream) {
+
+  try {
+
+    const ctx = new AudioContext();
+
+    const src =
+      ctx.createMediaStreamSource(stream);
+
+    const an = ctx.createAnalyser();
+
+    an.fftSize = 256;
+
+    src.connect(an);
+
+    const data =
+      new Uint8Array(an.frequencyBinCount);
+
+    (function tick() {
+
+      if (!cameraStream) return;
+
+      an.getByteTimeDomainData(data);
+
+      let sum = 0;
+
+      for (const v of data) {
+
+        const x = (v - 128) / 128;
+
+        sum += x * x;
+      }
+
+      $("micLevel").style.width =
+        Math.min(
+          100,
+          Math.sqrt(
+            sum / data.length
+          ) * 260
+        ) + "%";
+
+      requestAnimationFrame(tick);
+
+    })();
+
+  } catch (e) {
+
+    console.error(
+      "Microphone meter error:",
+      e
+    );
+  }
+}
+
+
+/* =========================
+   SPEECH RECOGNITION
+========================= */
+
+function startSpeech() {
+
+  const SR =
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition;
+
+  if (!SR) {
+
+    $("speechState").textContent =
+      "UNAVAILABLE";
+
+    return;
+  }
+
+  recognition = new SR();
+
+  recognition.continuous = true;
+
+  recognition.interimResults = true;
+
+  recognition.lang = "en-IN";
+
+
+  recognition.onstart = () => {
+
+    $("speechState").textContent =
+      "LISTENING";
+  };
+
+
+  recognition.onend = () => {
+
+    if (session) {
+
+      try {
+
+        recognition.start();
+
+      } catch {}
+    }
+  };
+
+
+  recognition.onerror = () => {};
+
+
+  recognition.onresult = e => {
+
+    let finalText = "";
+
+    for (
+      let i = e.resultIndex;
+      i < e.results.length;
+      i++
+    ) {
+
+      finalText +=
+        e.results[i][0].transcript;
+    }
+
+
+    if (
+      e.results[
+        e.results.length - 1
+      ].isFinal
+    ) {
+
+      transcript +=
+        ` ${finalText}`;
+
+      $("transcriptText").textContent =
+        transcript.trim();
+
+
+      if (
+        transcript.length % 600 < 80
+      ) {
+
+        analyzeTranscript();
+      }
+    }
+  };
+
+
+  try {
+
+    recognition.start();
+
+  } catch {}
+}
+
+
+/* =========================
+   TRANSCRIPT AI
+========================= */
+
+async function analyzeTranscript() {
+
+  if (!transcript) return;
+
+  try {
+
+    const d = await api(
+      "/api/transcript",
+      {
+        method: "POST",
+
+        body: JSON.stringify({
+          project: project(),
+
+          transcript:
+            transcript.slice(-5000)
+        })
+      }
+    );
+
+
+    const r = d.result || {};
+
+
+    $("clarity").textContent =
+      r.clarity ?? "--";
+
+
+    $("presentationScore").textContent =
+      r.confidence ?? "--";
+
+
+    $("evidence").textContent =
+      r.evidence ?? "--";
+
+
+    $("liveTechnical").textContent =
+      r.technicalDepth ?? "--";
+
+
+  } catch (e) {
+
+    console.error(
+      "Transcript analysis error:",
+      e
+    );
+  }
+}
+
+
+/* =========================
+   TIMER
+========================= */
+
+function startClock() {
+
+  timerStart = Date.now();
+
+  timerId = setInterval(() => {
+
+    const s =
+      Math.floor(
+        (Date.now() - timerStart) /
+        1000
+      );
+
+
+    $("timer").textContent =
+      `${String(
+        Math.floor(s / 60)
+      ).padStart(2, "0")}:${String(
+        s % 60
+      ).padStart(2, "0")}`;
+
+  }, 500);
+}
+
+
+function stopClock() {
+
+  clearInterval(timerId);
+}
+
+
+/* =========================
+   CAPTURE VIDEO FRAME
+========================= */
+
+function captureFrame(video) {
+
+  if (!video.videoWidth) {
+
+    return null;
+  }
+
+
+  const c =
+    document.createElement("canvas");
+
+
+  c.width = 640;
+
+
+  c.height =
+    Math.round(
+      video.videoHeight /
+      video.videoWidth *
+      640
+    );
+
+
+  const x =
+    c.getContext("2d");
+
+
+  x.drawImage(
+    video,
+    0,
+    0,
+    c.width,
+    c.height
+  );
+
+
+  return c.toDataURL(
+    "image/jpeg",
+    0.58
+  );
+}
+
+
+/* =========================
+   LIVE AI ANALYSIS
+========================= */
+
+async function liveAnalyze() {
+
+  if (!session) return;
+
+
+  const p = project();
+
+
+  if (!p.projectName) return;
+
+
+  const frame =
+    captureFrame(
+      $("camera")
+    );
+
+
+  const screen =
+    captureFrame(
+      $("screen")
+    );
+
+
+  if (!frame && !screen) return;
+
+
+  $("analysisState").textContent =
+    "ANALYZING";
+
+
+  try {
+
+    const d = await api(
+      "/api/live-analyze",
+      {
+        method: "POST",
+
+        body: JSON.stringify({
+
+          project: p,
+
+          transcript:
+            transcript.slice(-2500),
+
+          frame,
+
+          screenFrame:
+            screen
+        })
+      }
+    );
+
+
+    const r =
+      d.result || {};
+
+
+    $("liveFeed").innerHTML =
+      `<div>
+        <b>
+          ${esc(
+            r.observation ||
+            "Live moment analyzed"
+          )}
+        </b>
+      </div>
+
+      ${(r.strengths || [])
+        .map(
+          x =>
+            `<div class="feedGood">
+              + ${esc(x)}
+            </div>`
+        )
+        .join("")}
+
+      ${(r.alerts || [])
+        .map(
+          x =>
+            `<div class="feedAlert">
+              ! ${esc(x)}
+            </div>`
+        )
+        .join("")}
+
+      <div class="coach">
+        Coach:
+        ${esc(
+          r.coaching ||
+          "Keep presenting clearly."
+        )}
+      </div>`;
+
+
+    $("analysisState").textContent =
+      "LIVE";
+
+
+  } catch (e) {
+
+    $("analysisState").textContent =
+      "ERROR";
+
+    console.error(
+      "Live analysis error:",
+      e
+    );
+
+  } finally {
+
+    if (session) {
+
+      liveTimer =
+        setTimeout(
+          liveAnalyze,
+          8000
+        );
+    }
+  }
+}
+
+
+/* =========================
+   START SESSION
+========================= */
+
+$("startSession").onclick =
+  async () => {
+
+    if (session) return;
+
+
+    session = true;
+
+
+    $("sessionState").textContent =
+      "LIVE";
+
+
+    $("startSession").disabled =
+      true;
+
+
+    startClock();
+
+
+    await startCamera();
+
+
+    startSpeech();
+
+
+    liveAnalyze();
+  };
+
+
+/* =========================
+   STOP SESSION
+========================= */
+
+$("stopSession").onclick =
+  () => {
+
+    session = false;
+
+
+    $("sessionState").textContent =
+      "STOPPED";
+
+
+    $("startSession").disabled =
+      false;
+
+
+    stopClock();
+
+
+    clearTimeout(
+      liveTimer
+    );
+
+
+    if (recognition) {
+
+      try {
+
+        recognition.stop();
+
+      } catch {}
+    }
+
+
+    [
+      cameraStream,
+      screenStream
+    ].forEach(
+      s =>
+        s?.getTracks()
+          .forEach(
+            t => t.stop()
+          )
+    );
+
+
+    cameraStream = null;
+
+    screenStream = null;
+  };
+
+
+/* =========================
+   CAMERA BUTTON
+========================= */
+
+$("cameraBtn").onclick =
+  () =>
+    cameraStream
+      ? cameraStream
+          .getTracks()
+          .forEach(
+            t =>
+              t.enabled =
+              !t.enabled
+          )
+      : startCamera();
+
+
+/* =========================
+   MICROPHONE BUTTON
+========================= */
+
+$("micBtn").onclick =
+  () =>
+    cameraStream &&
+    cameraStream
+      .getAudioTracks()
+      .forEach(
+        t =>
+          t.enabled =
+          !t.enabled
+      );
+
+
+/* =========================
+   SCREEN BUTTON
+========================= */
+
+$("screenBtn").onclick =
+  startScreen;
+
+
+/* =========================
+   RECORDING
+========================= */
+
+$("recordBtn").onclick =
+  () => {
+
+    if (!cameraStream) {
+
+      alert(
+        "Start the live session first."
+      );
+
+      return;
+    }
+
+
+    if (!recorder) {
+
+      recorded = [];
+
+
+      recorder =
+        new MediaRecorder(
+          cameraStream
+        );
+
+
+      recorder.ondataavailable =
+        e => {
+
+          if (e.data.size) {
+
+            recorded.push(
+              e.data
+            );
+          }
+        };
+
+
+      recorder.onstop =
+        () => {
+
+          const a =
+            document.createElement(
+              "a"
+            );
+
+
+          a.href =
+            URL.createObjectURL(
+              new Blob(
+                recorded,
+                {
+                  type:
+                    "video/webm"
+                }
+              )
+            );
+
+
+          a.download =
+            "judgex-session.webm";
+
+
+          a.click();
+
+
+          recorder = null;
+        };
+
+
+      recorder.start();
+
+
+      $("recordBtn").textContent =
+        "Stop & Save";
+
+
+    } else {
+
+      recorder.stop();
+
+
+      $("recordBtn").textContent =
+        "Record";
+    }
+  };
+
+
+/* =========================
+   CLEAR TRANSCRIPT
+========================= */
+
+$("clearTranscript").onclick =
+  () => {
+
+    transcript = "";
+
+
+    $("transcriptText").textContent =
+      "";
+  };
+
+
+/* =========================
+   AGENTIC AI JUDGE
+========================= */
+
+$("agentBtn").onclick =
+  async () => {
+
+    const p = project();
+
+
+    if (
+      !p.projectName ||
+      !p.problem ||
+      !p.solution
+    ) {
+
+      return alert(
+        "Enter project name, problem and solution first."
+      );
+    }
+
+
+    const b =
+      $("agentBtn");
+
+
+    b.disabled = true;
+
+
+    b.textContent =
+      "Agents are judging…";
+
+
+    try {
+
+      const d = await api(
+        "/api/agentic-evaluate",
+        {
+          method: "POST",
+
+          body:
+            JSON.stringify(p)
+        }
+      );
+
+
+      lastResult =
+        d.result;
+
+
+      const r =
+        d.result;
+
+
+      $("overallScore").textContent =
+        r.overallScore ?? "--";
+
+
+      $("verdict").textContent =
+        r.verdict ||
+        "Evaluated";
+
+
+      $("problemScore").textContent =
+        r.scores?.problem ??
+        "--";
+
+
+      $("innovationScore").textContent =
+        r.scores?.innovation ??
+        "--";
+
+
+      $("technicalScore").textContent =
+        r.scores?.technical ??
+        "--";
+
+
+      $("impactScore").textContent =
+        r.scores?.impact ??
+        "--";
+
+
+      $("feasibilityScore").textContent =
+        r.scores?.feasibility ??
+        "--";
+
+
+      $("confidence").textContent =
+        (r.confidence ?? "--") +
+        "%";
+
+
+      $("summary").textContent =
+        r.summary || "";
+
+
+      list(
+        "gaps",
+        r.criticalGaps
+      );
+
+
+      list(
+        "questions",
+        r.judgeQuestions
+      );
+
+
+      list(
+        "actionPlan",
+        r.actionPlan
+      );
+
+
+      $("consensus").textContent =
+        r.agentConsensus ||
+        "";
+
+
+      $("agentReports").innerHTML =
+        (d.agents || [])
+          .map(
+            a =>
+              `<div class="agentRow">
+
+                <b>
+                  ${esc(a.agent)}
+                </b>
+
+                <span>
+                  ${a.score}/100 •
+                  ${a.confidence}%
+                  confidence
+                </span>
+
+                <small>
+                  ${esc(
+                    (
+                      a.findings ||
+                      []
+                    )
+                      .slice(0, 2)
+                      .join(" ")
+                  )}
+                </small>
+
+              </div>`
+          )
+          .join("");
+
+
+    } catch (e) {
+
+      alert(
+        e.message
+      );
+
+    } finally {
+
+      b.disabled =
+        false;
+
+
+      b.textContent =
+        "Run Agentic AI Judge";
+    }
+  };
+
+
+/* =========================
+   DEMO PROJECT
+========================= */
+
+$("demoBtn").onclick =
+  () => {
+
+    $("projectName").value =
+      "SAFEHELM";
+
+
+    $("problem").value =
+      "Industrial workers may face hazards without early detection or real-time supervisor visibility.";
+
+
+    $("solution").value =
+      "A smart safety helmet concept using sensors, alerts and a supervisor dashboard to improve workplace hazard awareness.";
+
+
+    $("technology").value =
+      "ESP32, sensors, wireless connectivity, real-time dashboard and AI-assisted analysis.";
+
+
+    $("impact").value =
+      "Faster safety alerts, better supervisor visibility, scalable worker monitoring and a path toward industrial deployment.";
+  };
+
+
+/* =========================
+   CHATBOT
+========================= */
+
+$("sendBtn").onclick =
+  sendChat;
+
+
+$("chatInput").onkeydown =
+  e => {
+
+    if (
+      e.key === "Enter"
+    ) {
+
+      sendChat();
+    }
+  };
+
+
+async function sendChat() {
+
+  const text =
+    $("chatInput")
+      .value
+      .trim();
+
+
+  if (!text) return;
+
+
+  addMessage(
+    text,
+    "user"
+  );
+
+
+  $("chatInput").value =
+    "";
+
+
+  $("sendBtn").disabled =
+    true;
+
+
+  try {
+
+    const d = await api(
+      "/api/chat",
+      {
+        method: "POST",
+
+        body:
+          JSON.stringify({
+
+            message:
+              text,
+
+            project:
+              project(),
+
+            history:
+              chatHistory,
+
+            liveState: {
+
+              transcript:
+                transcript.slice(
+                  -1200
+                ),
+
+              score:
+                lastResult
+                  ?.overallScore
+            }
+          })
+      }
+    );
+
+
+    chatHistory.push(
+
+      {
+        role: "user",
+        content: text
+      },
+
+      {
+        role: "assistant",
+        content: d.reply
+      }
+    );
+
+
+    addMessage(
+      d.reply,
+      "ai"
+    );
+
+
+  } catch (e) {
+
+    addMessage(
+      "AI connection error: " +
+      e.message,
+      "ai"
+    );
+
+  } finally {
+
+    $("sendBtn").disabled =
+      false;
+  }
+}
+
+
+function addMessage(
+  text,
+  type
+) {
+
+  const d =
+    document.createElement(
+      "div"
+    );
+
+
+  d.className =
+    "message " +
+    type;
+
+
+  d.textContent =
+    text;
+
+
+  $("chatMessages")
+    .appendChild(d);
+
+
+  $("chatMessages")
+    .scrollTop =
+    $("chatMessages")
+      .scrollHeight;
+}
+
+
+/* =========================
+   EXPORT REPORT
+========================= */
+
+$("exportBtn").onclick =
+  () => {
+
+    const report = {
+
+      generatedAt:
+        new Date()
+          .toISOString(),
+
+      project:
+        project(),
+
+      agenticJudge:
+        lastResult,
+
+      transcript
+    };
+
+
+    const blob =
+      new Blob(
+        [
+          JSON.stringify(
+            report,
+            null,
+            2
+          )
+        ],
+        {
+          type:
+            "application/json"
+        }
+      );
+
+
+    const a =
+      document.createElement(
+        "a"
+      );
+
+
+    a.href =
+      URL.createObjectURL(
+        blob
+      );
+
+
+    a.download =
+      "JUDGEX-final-report.json";
+
+
+    a.click();
+  };
+
+
+/* =========================
+   INITIAL BACKEND CHECK
+========================= */
+
 health();
