@@ -510,6 +510,15 @@ Do not infer private traits.
         });
     }
 });
-  
+}
+});
+
+/* =========================
+   START SERVER
+========================= */
+
+app.listen(PORT, () => {
+  console.log(`JUDGEX backend running on port ${PORT}`);
+});  
   
     
