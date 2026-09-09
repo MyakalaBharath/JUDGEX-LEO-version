@@ -507,8 +507,6 @@ Do not infer private traits.
 
         res.status(500).json({
             error: e.message || "Transcript analysis failed"
-        });
-    }
 });
 }
 });
